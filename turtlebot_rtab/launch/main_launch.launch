@@ -1,0 +1,8 @@
+<launch>
+
+  <include file="$(find turtlebot_rtab)/launch/rtab_localization.launch"/>
+
+  <node pkg="turtlebot_rtab" type="main.py" name="main_node" output="screen"/>
+  </node>
+
+</launch>
