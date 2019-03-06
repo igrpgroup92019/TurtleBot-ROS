@@ -5,25 +5,14 @@ import actionlib
 import geometry_msgs
 from geometry_msgs.msg import PoseStamped
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
-import tf.transformations
+from tf.transformations import euler_from_quaternion, quaternion_from_euler
 import time
 
 class MainNavigation:
-    # We create some constants with the corresponing vaules from the SimpleGoalState class
-    PENDING = 0
-    ACTIVE = 1
-    DONE = 2
-    WARN = 3
-    ERROR = 4
-
     #x y and theta coordinates for goals
     x = 0.0
     y = 0.0
     theta = 0.0
-
-    #bool variables for checking listener input
-    goal_received = False
-    marker_detected = False
 
     #x y and theta coordinates for marker
     m_x = 0.0
@@ -33,8 +22,16 @@ class MainNavigation:
     def __init__(self):
         #Initializes node
         rospy.init_node('map_navigation')
-        sub_goal = rospy.Subscriber('/rtabmap/goal', PoseStamped, self.goal_listener)
+        sub_goal = rospy.Subscriber('/rtabmap/goal_out', PoseStamped, self.goal_listener)
         sub_marker = rospy.Subscriber('/aruco_single/pose', PoseStamped, self.marker_listener)
+
+        self.goal_received = False
+        self.marker_detected = False
+
+        # Creates the SimpleActionClient
+        self.action_server_name = '/move_base'
+        self.move_base_client = actionlib.SimpleActionClient(self.action_server_name, MoveBaseAction)
+
         self.start_navigation()
 
     # definition of the feedback callback. This will be called when feedback
@@ -42,9 +39,9 @@ class MainNavigation:
     # it prints the current location of the robot based on the x,y and theta coordinates
     def feedback_callback(self, feedback):
         current_theta = 0.0
-        current_x = feedback.pose.position.x
-        current_y = feedback.pose.position.y
-        c_or = feedback.pose.orientation
+        current_x = feedback.base_position.pose.position.x
+        current_y = feedback.base_position.pose.position.y
+        c_or = feedback.base_position.pose.orientation
         (roll,pitch,current_theta) = euler_from_quaternion([c_or.x, c_or.y, c_or.z, c_or.w])
         print('feedback received => Current Robot Position: x = %d, y = %d, theta = %d', current_x, current_y, current_theta)
 
@@ -52,40 +49,37 @@ class MainNavigation:
         global x
         global y
         global theta
-        global goal_received
         x = coordinates.pose.position.x
         y = coordinates.pose.position.y
         orient = coordinates.pose.orientation
         (roll,pitch,theta) = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
-        goal_received = True
+        self.goal_received = True
+        print "Goal received"
 
     def marker_listener(self, marker_pose):
         global m_x
         global m_y
         global m_theta
-        global marker_detected
         m_x = marker_pose.pose.position.x
         m_y = marker_pose.pose.position.y
         m_orient = marker_pose.pose.orientation
         (roll,pitch,m_theta) = euler_from_quaternion([m_orient.x, m_orient.y, m_orient.z, m_orient.w])
-        marker_detected = True
+        self.marker_detected = True
 
     def start_navigation(self):
-        # Creates the SimpleActionClient
-        action_server_name = '/move_base'
-        move_base_client = actionlib.SimpleActionClient(action_server_name, MoveBaseAction)
-
         # Waits until the action server has started up and started
         # listening for goals.
-        rospy.loginfo('Waiting for action Server ' + action_server_name)
-        move_base_client.wait_for_server()
-        rospy.loginfo('Action Server Found...' + action_server_name)
+        rospy.loginfo('Waiting for action Server ' + self.action_server_name)
+        self.move_base_client.wait_for_server()
+        rospy.loginfo('Action Server Found...' + self.action_server_name)
         while not rospy.is_shutdown():
-            if goal_received == True:
+            if self.goal_received == True:
                 self.send_goal(x, y, theta)
+                rospy.loginfo("Sending goal to main algorithm -- x:%d, y:%d, theta:%d",x,y,theta)
+
 
     def send_goal(self, x, y, theta):
-        goal_received = False
+        self.goal_received = False
         # Creates a goal to send to the action server.
         pose = geometry_msgs.msg.Pose()
         pose.position.x = x
@@ -100,24 +94,31 @@ class MainNavigation:
 
         # Sends the goal to the action server.
         rospy.loginfo('Sending goal to action server: %s', goal)
-        move_base_client.send_goal(goal, feedback_cb=self.feedback_callback)
+        self.move_base_client.send_goal(goal, feedback_cb=self.feedback_callback)
 
         # state_result will give the FINAL STATE. Will be 1 when Active, and 2 if NO ERROR, 3 If Any Warning, and 3 if ERROR
-        state_result = client.get_state()
+        state_result = self.move_base_client.get_state()
 
         rate = rospy.Rate(1)
 
         rospy.loginfo("state_result: "+str(state_result))
 
+        # We create some constants with the corresponing vaules from the SimpleGoalState class
+        PENDING = 0
+        ACTIVE = 1
+        DONE = 2
+        WARN = 3
+        ERROR = 4
+
         while state_result < DONE:
             rospy.loginfo("Checking for alien while performing navigation....")
-            if marker_detected == True:
-                move_base_client.cancel_goal()
-                marker_detected = False
+            if self.marker_detected == True:
+                self.move_base_client.cancel_goal()
+                self.marker_detected = False
             #here algorithm for goal recalculation
             #send new goal send_goal(new_x,new_y,new_theta)
             rate.sleep()
-            state_result = client.get_state()
+            state_result = self.move_base_client.get_state()
             rospy.loginfo("state_result: "+str(state_result))
 
         rospy.loginfo("[Result] State: "+str(state_result))
@@ -128,9 +129,9 @@ class MainNavigation:
         else:
           # Waits for the server to finish performing the action.
           print 'Waiting for result...'
-          move_base_client.wait_for_result()
+          self.move_base_client.wait_for_result()
         rospy.loginfo("Goal Reached! Success!")
-        return move_base_client.get_result()
+        return self.move_base_client.get_result()
 
 
 if __name__ == '__main__':
