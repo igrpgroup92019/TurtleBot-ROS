@@ -3,7 +3,8 @@
 import rospy
 import actionlib
 import geometry_msgs
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
+from kobuki_msgs.msg import BumperEvent
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 import tf.transformations
 import time
@@ -23,32 +24,28 @@ class MainNavigation:
 
     #bool variables for checking listener input
     goal_received = False
-    marker_detected = False
-
-    #x y and theta coordinates for marker
-    m_x = 0.0
-    m_y = 0.0
-    m_theta = 0.0
+    alien_detected = False
 
     def __init__(self):
         #Initializes node
         rospy.init_node('map_navigation')
-        sub_goal = rospy.Subscriber('/rtabmap/goal', PoseStamped, self.goal_listener)
-        sub_marker = rospy.Subscriber('/aruco_single/pose', PoseStamped, self.marker_listener)
-        self.start_navigation()
+        sub_goal = rospy.Subscriber('/rtabmap/goal', PoseStamped, goal_listener)
+        sub_bumper = rospy.Subscriber('/mobile_base/events/bumper', BumperEvent, bumper_listener)
+        publisher = rospy.Publisher('/cmd_vel_mux/input/teleop', Twist, queue_size=1)
+        start_navigation()
 
     # definition of the feedback callback. This will be called when feedback
     # is received from the action server
     # it prints the current location of the robot based on the x,y and theta coordinates
-    def feedback_callback(self, feedback):
+    def feedback_callback(feedback):
         current_theta = 0.0
         current_x = feedback.pose.position.x
         current_y = feedback.pose.position.y
         c_or = feedback.pose.orientation
         (roll,pitch,current_theta) = euler_from_quaternion([c_or.x, c_or.y, c_or.z, c_or.w])
-        print('feedback received => Current Robot Position: x = %d, y = %d, theta = %d', current_x, current_y, current_theta)
+        print('feedback received => Current Robot Position: x = %c, y = %d, theta = %e', current_x, current_y, current_theta)
 
-    def goal_listener(self, coordinates):
+    def goal_listener(coordinates):
         global x
         global y
         global theta
@@ -59,18 +56,12 @@ class MainNavigation:
         (roll,pitch,theta) = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
         goal_received = True
 
-    def marker_listener(self, marker_pose):
-        global m_x
-        global m_y
-        global m_theta
-        global marker_detected
-        m_x = marker_pose.pose.position.x
-        m_y = marker_pose.pose.position.y
-        m_orient = marker_pose.pose.orientation
-        (roll,pitch,m_theta) = euler_from_quaternion([m_orient.x, m_orient.y, m_orient.z, m_orient.w])
-        marker_detected = True
+    def bumper_listener(bumper):
+        global alien_detected
+        if bumper.state == 1:
+            alien_detected = True
 
-    def start_navigation(self):
+    def start_navigation(self, choice):
         # Creates the SimpleActionClient
         action_server_name = '/move_base'
         move_base_client = actionlib.SimpleActionClient(action_server_name, MoveBaseAction)
@@ -78,11 +69,11 @@ class MainNavigation:
         # Waits until the action server has started up and started
         # listening for goals.
         rospy.loginfo('Waiting for action Server ' + action_server_name)
-        move_base_client.wait_for_server()
+        client.wait_for_server()
         rospy.loginfo('Action Server Found...' + action_server_name)
         while not rospy.is_shutdown():
             if goal_received == True:
-                self.send_goal(x, y, theta)
+                send_goal(x, y, theta)
 
     def send_goal(self, x, y, theta):
         goal_received = False
@@ -100,7 +91,10 @@ class MainNavigation:
 
         # Sends the goal to the action server.
         rospy.loginfo('Sending goal to action server: %s', goal)
-        move_base_client.send_goal(goal, feedback_cb=self.feedback_callback)
+        try:
+            move_base_client.send_goal(goal, feedback_cb=feedback_callback)
+        expect rospy.ROSInterruptException:
+            print "program interrupted before completion"
 
         # state_result will give the FINAL STATE. Will be 1 when Active, and 2 if NO ERROR, 3 If Any Warning, and 3 if ERROR
         state_result = client.get_state()
@@ -111,11 +105,6 @@ class MainNavigation:
 
         while state_result < DONE:
             rospy.loginfo("Checking for alien while performing navigation....")
-            if marker_detected == True:
-                move_base_client.cancel_goal()
-                marker_detected = False
-            #here algorithm for goal recalculation
-            #send new goal send_goal(new_x,new_y,new_theta)
             rate.sleep()
             state_result = client.get_state()
             rospy.loginfo("state_result: "+str(state_result))
@@ -129,9 +118,26 @@ class MainNavigation:
           # Waits for the server to finish performing the action.
           print 'Waiting for result...'
           move_base_client.wait_for_result()
-        rospy.loginfo("Goal Reached! Success!")
+        rospy.loginfo("Parking...!)
         return move_base_client.get_result()
 
+        #positions alien in the right position
+        move = Twist()
+        move.linear.x = 0.3
+        while alien_detected == False:
+            self.publisher.publish(move)
+            rate.sleep()
+        move.linear.x = 0
+        while not rospy.is_shutdown():
+            connections = publisher.get_num_connections()
+            if connections > 0:
+                self.publisher.publish(move)
+                break
+            else:
+                rate.sleep()
 
 if __name__ == '__main__':
-    MainNavigation()
+    try:
+        MainNavigation()
+    except rospy.ROSInterruptException:
+        rospy.loginfo("map_navigation node terminated.")

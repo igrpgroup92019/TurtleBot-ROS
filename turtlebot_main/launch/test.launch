@@ -1,0 +1,4 @@
+<launch>
+  <node pkg="turtlebot_main" type="main.py" name="main_node" output="screen">
+  </node>
+</launch>
