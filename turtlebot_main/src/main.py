@@ -9,6 +9,12 @@ from tf.transformations import euler_from_quaternion, quaternion_from_euler
 import time
 
 class MainNavigation:
+
+    #current x y and theta coordinates
+    current_x = 0.0
+    current_y = 0.0
+    current_theta = 0.0
+
     #x y and theta coordinates for goals
     x = 0.0
     y = 0.0
@@ -23,8 +29,9 @@ class MainNavigation:
         #Initializes node
         rospy.init_node('map_navigation')
         sub_goal = rospy.Subscriber('/rtabmap/goal_out', PoseStamped, self.goal_listener)
-        sub_marker = rospy.Subscriber('/aruco_single/pose', PoseStamped, self.marker_listener)
+        self.sub_marker = rospy.Subscriber('/aruco_single/pose', PoseStamped, self.marker_listener)
 
+        #bool variables for checking
         self.goal_received = False
         self.marker_detected = False
 
@@ -38,7 +45,7 @@ class MainNavigation:
     # is received from the action server
     # it prints the current location of the robot based on the x,y and theta coordinates
     def feedback_callback(self, feedback):
-        current_theta = 0.0
+        global current_x, current_y, current_theta
         current_x = feedback.base_position.pose.position.x
         current_y = feedback.base_position.pose.position.y
         c_or = feedback.base_position.pose.orientation
@@ -46,9 +53,7 @@ class MainNavigation:
         print('feedback received => Current Robot Position: x = %d, y = %d, theta = %d', current_x, current_y, current_theta)
 
     def goal_listener(self, coordinates):
-        global x
-        global y
-        global theta
+        global x, y, theta
         x = coordinates.pose.position.x
         y = coordinates.pose.position.y
         orient = coordinates.pose.orientation
@@ -57,14 +62,20 @@ class MainNavigation:
         print "Goal received"
 
     def marker_listener(self, marker_pose):
-        global m_x
-        global m_y
-        global m_theta
+        global m_x, m_y, m_theta
         m_x = marker_pose.pose.position.x
         m_y = marker_pose.pose.position.y
         m_orient = marker_pose.pose.orientation
         (roll,pitch,m_theta) = euler_from_quaternion([m_orient.x, m_orient.y, m_orient.z, m_orient.w])
         self.marker_detected = True
+
+    def reach_marker(self):
+        print "Recalculating goal..."
+        new_x = current_x + m_x - 0.6
+        new_y = current_y + m_y
+        new_theta = current_theta
+        self.send_goal(new_x, new_y, new_theta)
+        #new theta should be an orientation which either faces the alien or 180 degrees from it ready to go back
 
     def start_navigation(self):
         # Waits until the action server has started up and started
@@ -84,7 +95,6 @@ class MainNavigation:
         pose = geometry_msgs.msg.Pose()
         pose.position.x = x
         pose.position.y = y
-        theta = 0.0  #in radians
         q = quaternion_from_euler(0, 0, theta)
         pose.orientation = geometry_msgs.msg.Quaternion(*q)
         goal = MoveBaseGoal()
@@ -114,9 +124,11 @@ class MainNavigation:
             rospy.loginfo("Checking for alien while performing navigation....")
             if self.marker_detected == True:
                 self.move_base_client.cancel_goal()
+                print "Alien has been detected!"
                 self.marker_detected = False
-            #here algorithm for goal recalculation
-            #send new goal send_goal(new_x,new_y,new_theta)
+                self.sub_marker.unregister()
+                #goal recalculation
+                self.reach_marker()
             rate.sleep()
             state_result = self.move_base_client.get_state()
             rospy.loginfo("state_result: "+str(state_result))
