@@ -7,7 +7,7 @@ from geometry_msgs.msg import PoseStamped
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 import time
-from math import tan, cos, sin, pi
+from math import tan, cos, sin, pi, sqrt, pow
 from visualization_msgs.msg import Marker
 import tf2_ros
 import tf2_geometry_msgs
@@ -72,7 +72,7 @@ class MainNavigation:
 
     def marker_listener(self, marker_pose):
         global m_x, m_y, m_theta, m_pitch
-        updated_pose = pose_tf_transformer(marker_pose)
+        updated_pose = self.pose_tf_transformer(marker_pose)
         m_x = updated_pose.pose.position.x
         m_y = updated_pose.pose.position.y
         m_orient = updated_pose.pose.orientation
@@ -81,20 +81,24 @@ class MainNavigation:
 
     def pose_tf_transformer(self, pose):
         #the listener is created and it starts receiving tf2 transformations and buffers them for up to 10 seconds
-        tf_buffer = tf.Buffer()
+        tf_buffer = tf2_ros.Buffer()
         tf_listener = tf2_ros.TransformListener(tf_buffer)
             #this catch statement will get the transform from aruco frame of reference to the base_footprint tf
-        try:
-            transform = tf_buffer.lookup_transform('base_footprint', pose.header.frame_id, rospy.Time(0))
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
-            rate.sleep()
-            continue
+        transform = tf_buffer.lookup_transform('base_footprint', pose.header.frame_id, rospy.Time(0))
         #this will transform the actual pose to the one we need i.e. base_footprint
         pose_transformed = tf2_geometry_msgs.do_transform_pose(pose, transform)
         return pose_transformed
 
     def reach_marker(self):
         print "Recalculating goal..."
+
+        #test algorithm start
+        hyp = sqrt(pow(m_x,2) + pow(m_y,2))
+        dist = hyp * cos(m_pitch)
+        dist_y = dist * sin(m_theta)
+        dist_x = dist * cos(m_theta)
+        #dist x and dist y are modifications to m_x and m_y 
+        #test finish
 
         rospy.loginfo("x distance is %d, while y distance is %d", m_x, m_y)
 
@@ -147,13 +151,13 @@ class MainNavigation:
         robot_marker.header.frame_id = 'map'
         robot_marker.header.stamp = rospy.Time.now()
         robot_marker.action = Marker.ADD
-        robot_marker.scale.x = 1.0
-        robot_marker.scale.y = 1.0
-        robot_marker.scale.z = 1.0
+        robot_marker.scale.x = 0.2
+        robot_marker.scale.y = 0.2
+        robot_marker.scale.z = 0.2
         robot_marker.pose = pose
         robot_marker.color.a = 1.0
         robot_marker.color.b = 0.0
-        if self.marker_detected == 0:
+        if self.marker_goal == False:
             robot_marker.type = Marker.SPHERE
             robot_marker.color.r = 0.0
             robot_marker.color.g = 1.0

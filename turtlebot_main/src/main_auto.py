@@ -84,11 +84,8 @@ class MainNavigation:
         tf_buffer = tf.Buffer()
         tf_listener = tf2_ros.TransformListener(tf_buffer)
             #this catch statement will get the transform from aruco frame of reference to the base_footprint tf
-        try:
-            transform = tf_buffer.lookup_transform('base_footprint', pose.header.frame_id, rospy.Time(0))
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
-            rate.sleep()
-            continue
+        transform = tf_buffer.lookup_transform('base_footprint', pose.header.frame_id, rospy.Time(0))
+    
         #this will transform the actual pose to the one we need i.e. base_footprint
         pose_transformed = tf2_geometry_msgs.do_transform_pose(pose, transform)
         return pose_transformed
