@@ -10,18 +10,42 @@ import tf.transformations
 import time
 
 class MainNavigation:
+
     #x y and theta coordinates for goals
     x = 0.0
     y = 0.0
     theta = 0.0
 
+    #current x y and theta coordinates
+    current_x = 0.0
+    current_y = 0.0
+    current_theta = 0.0
+
     def __init__(self):
         #Initializes node
         rospy.init_node('map_navigation')
         sub_goal = rospy.Subscriber('/rtabmap/goal', PoseStamped, goal_listener)
-        sub_bumper = rospy.Subscriber('/mobile_base/events/bumper', BumperEvent, bumper_listener)
         self.publisher = rospy.Publisher('/cmd_vel_mux/input/teleop', Twist, queue_size=1)
+        sub_bumper = rospy.Subscriber('/mobile_base/events/bumper', BumperEvent, bumper_listener)
 
+        self.goal_received = False
+        self.alien_detected = False
+
+        # Creates the SimpleActionClient
+        self.action_server_name = '/move_base'
+        self.move_base_client = actionlib.SimpleActionClient(self.action_server_name, MoveBaseAction)
+
+        self.start_navigation()
+
+
+    def __init__(self):
+        #Initializes node
+        rospy.init_node('map_navigation')
+        sub_goal = rospy.Subscriber('/rtabmap/goal_out', PoseStamped, self.goal_listener)
+        self.sub_marker = rospy.Subscriber('/aruco_single/pose', PoseStamped, self.marker_listener)
+        self.pub_marker = rospy.Publisher('rviz_marker', Marker, queue_size=1)
+
+        #bool variables for checking
         self.goal_received = False
         self.alien_detected = False
 
@@ -35,51 +59,71 @@ class MainNavigation:
     # is received from the action server
     # it prints the current location of the robot based on the x,y and theta coordinates
     def feedback_callback(self, feedback):
-        current_theta = 0.0
-        current_x = feedback.base_positionpose.position.x
+        global current_x, current_y, current_theta
+        current_x = feedback.base_position.pose.position.x
         current_y = feedback.base_position.pose.position.y
         c_or = feedback.base_position.pose.orientation
         (roll,pitch,current_theta) = euler_from_quaternion([c_or.x, c_or.y, c_or.z, c_or.w])
-        print('feedback received => Current Robot Position: x = %c, y = %d, theta = %e', current_x, current_y, current_theta)
-
-    def goal_listener(self, coordinates):
-        global x
-        global y
-        global theta
-        x = coordinates.pose.position.x
-        y = coordinates.pose.position.y
-        orient = coordinates.pose.orientation
-        (roll,pitch,theta) = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
-        self.goal_received = True
+        rospy.loginfo('feedback received => Current Robot Position: x = %f, y = %f, theta = %f', current_x, current_y, current_theta)
 
     def bumper_listener(self, bumper):
         if bumper.state == 1:
             self.alien_detected = True
 
-    def start_navigation(self, choice):
+    def goal_listener(self, coordinates):
+        global x, y, theta
+        x = coordinates.pose.position.x
+        y = coordinates.pose.position.y
+        orient = coordinates.pose.orientation
+        (roll,pitch,theta) = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
+        self.goal_received = True
+        print "Goal received"
+
+    def start_navigation(self):
         # Waits until the action server has started up and started
         # listening for goals.
         rospy.loginfo('Waiting for action Server ' + self.action_server_name)
         self.move_base_client.wait_for_server()
         rospy.loginfo('Action Server Found...' + self.action_server_name)
-
         while not rospy.is_shutdown():
             if self.goal_received == True:
                 self.send_goal(x, y, theta)
+                rospy.loginfo("Sending goal to main algorithm -- x:%f, y:%f, theta:%f",x,y,theta)
+
 
     def send_goal(self, x, y, theta):
+        #current navigation goal coordinates
+        curr_nav_x = x
+        curr_nav_y = y
+        curr_nav_theta = theta
+
         self.goal_received = False
+
         # Creates a goal to send to the action server.
         pose = geometry_msgs.msg.Pose()
         pose.position.x = x
         pose.position.y = y
-        theta = 0.0  #in radians
         q = quaternion_from_euler(0, 0, theta)
         pose.orientation = geometry_msgs.msg.Quaternion(*q)
         goal = MoveBaseGoal()
         goal.target_pose.pose = pose
         goal.target_pose.header.frame_id = 'map'
         goal.target_pose.header.stamp = rospy.Time.now()
+
+        #Creates an rviz marker for the goal
+        robot_marker = Marker()
+        robot_marker.header.frame_id = 'map'
+        robot_marker.header.stamp = rospy.Time.now()
+        robot_marker.action = Marker.ADD
+        robot_marker.scale.x = 0.2
+        robot_marker.scale.y = 0.2
+        robot_marker.scale.z = 0.2
+        robot_marker.pose = pose
+        robot_marker.color.a = 1.0
+        robot_marker.color.b = 0.0
+        robot_marker.type = Marker.CUBE
+        robot_marker.color.r = 1.0
+        robot_marker.color.g = 0.0
 
         # Sends the goal to the action server.
         rospy.loginfo('Sending goal to action server: %s', goal)
@@ -88,7 +132,7 @@ class MainNavigation:
         # state_result will give the FINAL STATE. Will be 1 when Active, and 2 if NO ERROR, 3 If Any Warning, and 3 if ERROR
         state_result = self.move_base_client.get_state()
 
-        rate = rospy.Rate(1)
+        rate = rospy.Rate(10)
 
         rospy.loginfo("state_result: "+str(state_result))
 
@@ -101,6 +145,26 @@ class MainNavigation:
 
         while state_result < DONE:
             rospy.loginfo("Checking for alien while performing navigation....")
+
+            #check if a goal is being published and it is not the same as the current one, then cancel navigation and start new one
+            if self.goal_received == True and curr_nav_x != x and curr_nav_y != y:
+                self.move_base_client.cancel_goal()
+                print "Cancelling goal..."
+                self.marker_goal = False
+                self.send_goal(x,y,theta)
+                rospy.loginfo("Sending goal to main algorithm -- x:%f, y:%f, theta:%f",x,y,theta)
+
+            #publish rviz marker for goal
+            self.pub_marker.publish(robot_marker)
+
+            #goal cancelling can only be possible when goal is normal not when going towards marker
+            if self.marker_detected == True and self.marker_goal == False:
+                self.move_base_client.cancel_goal()
+                print "Alien has been detected!"
+                print "Cancelling goal..."
+                self.marker_detected = False
+                #goal recalculation
+                self.reach_marker()
             rate.sleep()
             state_result = self.move_base_client.get_state()
             rospy.loginfo("state_result: "+str(state_result))
@@ -114,7 +178,8 @@ class MainNavigation:
           # Waits for the server to finish performing the action.
           print 'Waiting for result...'
           self.move_base_client.wait_for_result()
-        rospy.loginfo("Parking...!)
+        rospy.loginfo("Goal Reached! Success!")
+        self.marker_goal = False
         return self.move_base_client.get_result()
 
         #positions alien in the right position
