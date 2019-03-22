@@ -13,6 +13,7 @@ from math import tan, cos, sin, pi, sqrt, pow, fabs
 from visualization_msgs.msg import Marker
 import tf2_ros
 import tf2_geometry_msgs
+from nav_msgs.msg import Odometry
 
 class MainNavigation:
 
@@ -21,7 +22,6 @@ class MainNavigation:
     y = 0.0
     theta = 0.0
 
-    #current x y and theta coordinates
     current_x = 0.0
     current_y = 0.0
     current_theta = 0.0
@@ -33,13 +33,14 @@ class MainNavigation:
         self.publisher = rospy.Publisher('/cmd_vel_mux/input/teleop', Twist, queue_size=1)
         sub_laser = rospy.Subscriber('/scan', LaserScan, self.laser_listener)
         self.pub_marker = rospy.Publisher('rviz_marker', Marker, queue_size=1)
+        sub_odom = rospy.Subscriber('/odom', Odometry, self.odom_listener)
 
         self.goal_received = False
         self.alien_detected = False
 
-        self.current_x = 0.0
-        self.current_y = 0.0
-        self.current_theta = 0.0
+        self.x_curr = 0.0
+        self.y_curr = 0.0
+        self.theta_curr = 0.0
 
         # Creates the SimpleActionClient
         self.action_server_name = '/move_base'
@@ -51,14 +52,18 @@ class MainNavigation:
     # is received from the action server
     # it prints the current location of the robot based on the x,y and theta coordinates
     def feedback_callback(self, feedback):
-        self.current_x = feedback.base_position.pose.position.x
-        self.current_y = feedback.base_position.pose.position.y
+        global current_x
+        global current_y
+        global current_theta
+
+        current_x = feedback.base_position.pose.position.x
+        current_y = feedback.base_position.pose.position.y
         c_or = feedback.base_position.pose.orientation
-        (roll,pitch,self.current_theta) = euler_from_quaternion([c_or.x, c_or.y, c_or.z, c_or.w])
-        rospy.loginfo('feedback received => Current Robot Position: x = %f, y = %f, theta = %f', self.current_x, self.current_y, self.current_theta)
+        (roll,pitch,current_theta) = euler_from_quaternion([c_or.x, c_or.y, c_or.z, c_or.w])
+        rospy.loginfo('feedback received => Current Robot Position: x = %f, y = %f, theta = %f', current_x, current_y, current_theta)
 
     def laser_listener(self, d):
-        if d.ranges[len(d.ranges)/2] < 0.15:
+        if d.ranges[len(d.ranges)/2] < 0.1:
             self.alien_detected = True
 
     def goal_listener(self, coordinates):
@@ -69,6 +74,12 @@ class MainNavigation:
         (roll,pitch,theta) = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
         self.goal_received = True
         print "Goal received"
+
+    def odom_listener(self, data):
+        self.x_curr = data.pose.pose.position.x
+        self.y_curr = data.pose.pose.position.y
+        orient = data.pose.pose.orientation
+        (roll,pitch,self.theta_curr) = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
 
     def start_navigation(self):
         # Waits until the action server has started up and started
@@ -169,7 +180,7 @@ class MainNavigation:
         while not rospy.is_shutdown():
             initial_x = 0.0
             initial_y = 0.0
-            d = "Dock"
+            a = "Dock"
             b = "undock"
             c = "continue"
             print "What do you want to do?"
@@ -177,15 +188,20 @@ class MainNavigation:
             print "B) Undock"
             print "C) Set new navigation goal"
             result = input()
+            self.alien_detected = False
+
             if result=="dock" or result=="Dock" or result=="A" or result=="a":
-                initial_x = self.current_x
-                initial_y = self.current_y
+                initial_x = self.x_curr
+                initial_y = self.y_curr
                 move.linear.x = 0.3
                 while self.alien_detected == False:
+                    print self.alien_detected
+                    print "one"
                     self.publisher.publish(move)
                     rate.sleep()
+                print "two"
                 move.linear.x = 0
-                distance_travelled = sqrt(pow(self.current_x - initial_x, 2) + pow(self.current_y - initial_y, 2))
+                distance_travelled = sqrt(pow(self.x_curr - initial_x, 2) + pow(self.y_curr - initial_y, 2))
                 while not rospy.is_shutdown():
                     connections = self.publisher.get_num_connections()
                     if connections > 0:
@@ -194,35 +210,37 @@ class MainNavigation:
                     else:
                         rate.sleep()
             elif result=="undock" or result=="Undock" or result=="B" or result=="b":
-                initial_theta = self.current_theta
-
+                initial_theta = self.theta_curr
                 move.angular.z = 1.0
                 difference = 0.0
                 while difference < pi:
                     print "enter"
-                    if initial_theta > 0 and self.current_theta <= 0:
-                        self.current_theta = self.current_theta + 2*pi
-                    difference = fabs(self.current_theta - initial_theta)
+                    if initial_theta > 0 and self.theta_curr <= 0:
+                        self.theta_curr = self.theta_curr + 2*pi
+                    difference = fabs(self.theta_curr - initial_theta)
+                    print initial_theta*180/pi
+                    print self.theta_curr*180/pi
+                    print difference*180/pi
                     if difference > 2.97:
                         move.angular.z = 0.03
                     self.publisher.publish(move)
                     rate.sleep()
                 move.angular.z = 0.0
                 while not rospy.is_shutdown():
-                    connections = publisher.get_num_connections()
+                    connections = self.publisher.get_num_connections()
                     if connections > 0:
                         self.publisher.publish(move)
                         break
                     else:
                         rate.sleep()
                 move.linear.x = 0.3
-                initial_x = self.current_x
-                initial_y = self.current_y
+                initial_x = self.x_curr
+                initial_y = self.y_curr
                 distance_back = 0.0
                 while distance_back < distance_travelled:
                     print distance_back
                     print distance_travelled
-                    distance_back = sqrt(pow(self.current_x - initial_x, 2) + pow(self.current_y - initial_y, 2))
+                    distance_back = sqrt(pow(self.x_curr - initial_x, 2) + pow(self.y_curr - initial_y, 2))
                     self.publisher.publish(move)
                     rate.sleep()
                 move.linear.x = 0
@@ -237,6 +255,7 @@ class MainNavigation:
                 break
             else:
                 print "Wrong command"
+
         return self.move_base_client.get_result()
 
 

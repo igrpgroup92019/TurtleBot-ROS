@@ -1,8 +1,7 @@
 <launch>
 
   <include file="$(find turtlebot_rtab)/launch/rtab_localization.launch"/>
-  <include file="$(find turtlebot_aruco)/launch/find_marker.launch"/>
-  <node pkg="turtlebot_main" type="main.py" name="main_node" output="screen">
+  <node pkg="turtlebot_main" type="test.py" name="main_node" output="screen">
   </node>
 
 </launch>
